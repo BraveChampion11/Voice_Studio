@@ -1,0 +1,10 @@
+services:
+  voice-studio:
+    build: .
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./saved_voices:/app/saved_voices
+      - ./rvc_models:/app/rvc_models
+      - ./training_data:/app/training_data
+    restart: unless-stopped

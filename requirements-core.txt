@@ -1,0 +1,9 @@
+gradio==4.44.0
+edge-tts==6.1.12
+pydub==0.25.1
+soundfile==0.12.1
+transformers==4.44.2
+tomli-w==1.0.0
+openai-whisper==20231117
+f5-tts==0.6.2
+yt-dlp==2024.8.6
