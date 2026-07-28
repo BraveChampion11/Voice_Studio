@@ -25,6 +25,15 @@ RUN pip install --no-cache-dir --no-deps --no-build-isolation -r requirements-rv
 COPY requirements-core.txt .
 RUN pip install --no-cache-dir --default-timeout=1000 --no-build-isolation -r requirements-core.txt
 
+# Patch a known gradio_client bug: get_type() assumes schema is always a dict,
+# but valid JSON Schema allows boolean sub-schemas (e.g. "additionalProperties": true)
+RUN python3 -c "\
+import re; \
+path = '/usr/local/lib/python3.11/site-packages/gradio_client/utils.py'; \
+content = open(path).read(); \
+content = content.replace('def get_type(schema: dict):', 'def get_type(schema):\n    if isinstance(schema, bool):\n        return \"Any\"', 1); \
+open(path, 'w').write(content)"
+
 COPY . .
 RUN mkdir -p saved_voices rvc_models training_data
 EXPOSE 7860
