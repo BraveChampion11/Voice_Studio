@@ -11,3 +11,4 @@ yt-dlp==2024.8.6
 x_transformers==1.31.14
 pydantic<=2.9.2
 fastapi==0.115.6
+torchaudio==2.3.1

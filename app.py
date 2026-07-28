@@ -18,10 +18,20 @@ from pydub import AudioSegment
 SAVED_VOICES_DIR = os.path.join(BASE_DIR, "saved_voices")
 os.makedirs(SAVED_VOICES_DIR, exist_ok=True)
 
-EDGE_TTS_EXE = os.path.join(BASE_DIR, "venv", "Scripts", "edge-tts.exe")
-F5_TTS_EXE = os.path.join(BASE_DIR, "venv", "Scripts", "f5-tts_infer-cli.exe")
+import shutil as _shutil
+
+def _find_exe(name):
+    """Locate a CLI tool cross-platform: use PATH lookup in Docker/Linux,
+    fall back to the original Windows venv path for local dev on Windows."""
+    path = _shutil.which(name)
+    if path:
+        return path
+    return os.path.join(BASE_DIR, "venv", "Scripts", f"{name}.exe")
+
+EDGE_TTS_EXE = _find_exe("edge-tts")
+F5_TTS_EXE = _find_exe("f5-tts_infer-cli")
 RVC_MODELS_DIR = os.path.join(BASE_DIR, "rvc_models")
-RVC_PYTHON_EXE = os.path.join(BASE_DIR, "rvc_venv", "Scripts", "python.exe")
+RVC_PYTHON_EXE = sys.executable  # same environment in Docker — no separate rvc_venv
 RVC_INFER_SCRIPT = os.path.join(BASE_DIR, "rvc_infer.py")
 os.makedirs(RVC_MODELS_DIR, exist_ok=True)
 
@@ -257,6 +267,9 @@ def generate_hindi(text, voice_id, use_transliteration, speed, pitch, progress=g
     status.append("✅ Generated successfully!")
     progress(1.0)
     return output_path, "\n".join(status)
+def contains_hindi_urdu_script(text):
+    """True if text contains Devanagari (Hindi) or Arabic/Urdu script characters."""
+    return any('\u0900' <= c <= '\u097F' or '\u0600' <= c <= '\u06FF' for c in text)
 
 # ─── Extract Text (Whisper) ───
 def extract_text_fn(audio_path, progress=gr.Progress()):
@@ -286,37 +299,53 @@ def extract_text_fn(audio_path, progress=gr.Progress()):
 import re
 
 def parse_podcast_script(script_text):
-    """Parse a script like 'NARUTO: Hey! \n LUFFY: Yo!' into [(name, line), ...]"""
+    """Parse a script like 'NARUTO: Hey! \n LUFFY: Yo!' into [(name, line), ...].
+    Returns (parsed_lines, warnings) — warnings describe any skipped/malformed lines."""
     lines = []
-    for raw_line in script_text.strip().split("\n"):
+    warnings = []
+    for line_num, raw_line in enumerate(script_text.strip().split("\n"), start=1):
         raw_line = raw_line.strip()
         if not raw_line:
             continue
         match = re.match(r'^([A-Za-z0-9_]+)\s*:\s*(.+)$', raw_line)
-        if match:
-            name = match.group(1).strip()
-            dialogue = match.group(2).strip()
-            if dialogue:
-                lines.append((name, dialogue))
-    return lines
-
+        if not match:
+            warnings.append(f"Line {line_num}: couldn't parse speaker/dialogue, skipped — \"{raw_line[:50]}\"")
+            continue
+        name = match.group(1).strip()
+        dialogue = match.group(2).strip()
+        if not dialogue:
+            warnings.append(f"Line {line_num}: '{name}' has no dialogue, skipped")
+            continue
+        lines.append((name, dialogue))
+    if not lines:
+        warnings.append("No valid lines found. Use format 'SPEAKER: dialogue text' on each line.")
+    return lines, warnings
 def generate_podcast(script_text, pause_ms, progress=gr.Progress()):
     if not script_text.strip():
         return None, "Write a script first."
 
-    parsed = parse_podcast_script(script_text)
+    parsed, warnings = parse_podcast_script(script_text)
     if not parsed:
-        return None, "❌ Could not parse script. Use format:\nNARUTO: Hey Luffy!\nLUFFY: Hey Naruto!"
+        return None, "❌ Could not parse script. Use format:\nNARUTO: Hey Luffy!\nLUFFY: Hey Naruto!\n\n" + "\n".join(warnings)
+
+    # Collect unique character names
+    parsed, warnings = parse_podcast_script(script_text)
+    if not parsed:
+        return None, "❌ Could not parse script. Use format:\nNARUTO: Hey Luffy!\nLUFFY: Hey Naruto!\n\n" + "\n".join(warnings)
 
     # Collect unique character names
     characters = list(dict.fromkeys([name for name, _ in parsed]))
     saved = get_saved_voices()
     saved_lower = {v.lower(): v for v in saved}
 
-    # Match characters to saved voices (case-insensitive)
+    # Only characters who have at least one non-Hindi/Urdu line need a saved voice
+    characters_needing_voice = set(
+        char for char, dialogue in parsed if not contains_hindi_urdu_script(dialogue)
+    )
+
     voice_map = {}
     missing = []
-    for char in characters:
+    for char in characters_needing_voice:
         if char.lower() in saved_lower:
             voice_map[char] = saved_lower[char.lower()]
         else:
@@ -330,28 +359,42 @@ def generate_podcast(script_text, pause_ms, progress=gr.Progress()):
             f"Character names in your script must match saved voice names.\n"
             f"Go to the Voice Cloner tab to save voices first."
         )
-
     log_lines = []
+    if warnings:
+        log_lines.append("⚠️ Parser warnings:")
+        log_lines.extend(f"  {w}" for w in warnings)
+        log_lines.append("")
     log_lines.append(f"📋 Parsed {len(parsed)} lines from {len(characters)} characters")
     for char in characters:
         log_lines.append(f"  {char} → voice '{voice_map[char]}'")
 
     # Generate each line
     audio_segments = []
-    pause = AudioSegment.silent(duration=int(pause_ms))
 
     for i, (char, dialogue) in enumerate(parsed):
         progress((i + 1) / len(parsed), desc=f"Generating line {i+1}/{len(parsed)}: {char}...")
-        log_lines.append(f"\n🎙️ [{i+1}/{len(parsed)}] {char}: \"{dialogue[:50]}...\"")
 
-        voice_name = voice_map[char]
-        voice_audio, voice_text = load_voice(voice_name)
-        if not voice_audio:
-            log_lines.append(f"  ⚠️ Audio file missing for '{voice_name}', skipping.")
-            continue
+        is_hindi_urdu = contains_hindi_urdu_script(dialogue)
+        route = "Edge-TTS (native Hindi/Urdu)" if is_hindi_urdu else "F5-TTS (voice clone)"
+        log_lines.append(f"\n🎙️ [{i+1}/{len(parsed)}] {char} via {route}: \"{dialogue[:50]}...\"")
 
         out_name = f"podcast_line_{i}.wav"
-        path, gen_log = run_f5tts(dialogue, voice_audio, voice_text, output_name=out_name)
+
+        if is_hindi_urdu:
+            # Route through Edge-TTS for correct native pronunciation.
+            # NOTE: this uses one default Hindi/Urdu voice for all such lines rather
+            # than per-character voice cloning — RVC-based voice matching for these
+            # lines is a possible future enhancement, not done here due to time.
+            out_path = os.path.join(TEMP_DIR, out_name)
+            ok, err = run_edge_tts(dialogue, DEFAULT_HINDI_URDU_VOICE, out_path)
+            path, gen_log = (out_path, "ok") if ok else (None, err)
+        else:
+            voice_name = voice_map[char]
+            voice_audio, voice_text = load_voice(voice_name)
+            if not voice_audio:
+                log_lines.append(f"  ⚠️ Audio file missing for '{voice_name}', skipping.")
+                continue
+            path, gen_log = run_f5tts(dialogue, voice_audio, voice_text, output_name=out_name)
 
         if path and os.path.exists(path):
             seg = AudioSegment.from_file(path)
@@ -363,18 +406,22 @@ def generate_podcast(script_text, pause_ms, progress=gr.Progress()):
     if not audio_segments:
         return None, "\n".join(log_lines) + "\n\n❌ No audio was generated."
 
-    # Stitch together with pauses
-    log_lines.append(f"\n🔗 Stitching {len(audio_segments)} segments...")
+    # Stitch together with a crossfade instead of a hard silence gap
+    log_lines.append(f"\n🔗 Stitching {len(audio_segments)} segments with crossfade...")
     final = audio_segments[0]
+    crossfade_ms = min(int(pause_ms), 300)  # cap crossfade so it never eats a whole short line
     for seg in audio_segments[1:]:
-        final = final + pause + seg
+        safe_fade = min(crossfade_ms, len(final), len(seg))
+        if safe_fade > 0:
+            final = final.append(seg, crossfade=safe_fade)
+        else:
+            final = final + seg  # segment too short to crossfade safely, just concatenate
 
     output_path = os.path.join(BASE_DIR, "podcast_output.wav")
     final.export(output_path, format="wav")
     log_lines.append(f"✅ Final podcast: {len(final)/1000:.1f}s total")
 
     return output_path, "\n".join(log_lines)
-
 # ─── Audio Editor Functions ───
 def edit_audio_trim(audio_path, start_s, end_s):
     if not audio_path: return None, "Upload audio first."
@@ -647,7 +694,7 @@ LUFFY: Let's gooo!
                     podcast_script = gr.Textbox(label="Podcast Script", lines=14,
                         placeholder="NARUTO: Hey Luffy, what's going on?\nLUFFY: Hey Naruto! Just had the best meat ever!\nNARUTO: That sounds awesome, want to spar?\nLUFFY: You're on!")
                     pause_slider = gr.Slider(100, 2000, value=500, step=50,
-                        label="Pause Between Lines (ms)", info="How long to pause between each character's line")
+                        label="Transition length (ms)", info="How long to pause between each character's line")
                     podcast_btn = gr.Button("🎙️ Generate Full Podcast", variant="primary", size="lg")
 
                 with gr.Column():
@@ -721,7 +768,7 @@ LUFFY: Let's gooo!
         with gr.TabItem("🎤 Voice-to-Voice (RVC)", visible=False):
             gr.Markdown("""### True Emotional Voice Cloning (Speech-to-Speech)
 Upload an audio of **you acting out a line**, select a downloaded `.pth` anime character model, and the AI will convert your voice while preserving exactly the timing, emotion, and breath.
-*(Models must be placed in `e:\project\searching\anime_voice_cloner\\rvc_models`)*""")
+*(Models must be placed in `e:/project/searching/anime_voice_cloner/rvc_models`)*""")
             with gr.Row():
                 with gr.Column():
                     rvc_in = gr.Audio(type="filepath", label="Input Audio (Your acting/reference)")

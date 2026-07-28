@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir "pip<24.1" "setuptools<70" wheel cython
 RUN pip install --no-cache-dir "numpy==1.23.5"
 
 # 3. Pull the massive PyTorch wheel first
-RUN pip install --no-cache-dir --default-timeout=1000 torch==2.3.1
+RUN pip install --no-cache-dir --default-timeout=1000 torch==2.3.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/cpu
 
 # 4. Install the RVC/fairseq chain WITHOUT letting pip resolve its old hydra-core pin
 COPY requirements-rvc.txt .
@@ -28,10 +28,9 @@ RUN pip install --no-cache-dir --default-timeout=1000 --no-build-isolation -r re
 # Patch a known gradio_client bug: get_type() assumes schema is always a dict,
 # but valid JSON Schema allows boolean sub-schemas (e.g. "additionalProperties": true)
 RUN python3 -c "\
-import re; \
 path = '/usr/local/lib/python3.11/site-packages/gradio_client/utils.py'; \
 content = open(path).read(); \
-content = content.replace('def get_type(schema: dict):', 'def get_type(schema):\n    if isinstance(schema, bool):\n        return \"Any\"', 1); \
+content = content.replace('def _json_schema_to_python_type(schema: Any, defs) -> str:', 'def _json_schema_to_python_type(schema: Any, defs) -> str:\n    if isinstance(schema, bool):\n        return \"Any\"', 1); \
 open(path, 'w').write(content)"
 
 COPY . .
