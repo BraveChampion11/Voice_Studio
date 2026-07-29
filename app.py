@@ -150,7 +150,7 @@ def run_f5tts(text, ref_audio_path, ref_text, output_name="output_cloned.wav"):
     import tomli_w
     config_path = os.path.join(BASE_DIR, "inference_config.toml")
     config_dict = {
-        "model": "F5TTS_Base", "ref_audio": trimmed,
+        "model": "F5-TTS", "ref_audio": trimmed,
         "ref_text": ref_text.strip(),
         "speed": 1.0, "nfe_step": 16, "gen_text": text,
         "output_dir": BASE_DIR, "output_file": output_name, "voices": {}
