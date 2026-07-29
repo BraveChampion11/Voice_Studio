@@ -320,6 +320,7 @@ def parse_podcast_script(script_text):
     if not lines:
         warnings.append("No valid lines found. Use format 'SPEAKER: dialogue text' on each line.")
     return lines, warnings
+DEFAULT_HINDI_URDU_VOICE = "hi-IN-MadhurNeural"  # Edge-TTS native voice for Hindi/Urdu lines
 def generate_podcast(script_text, pause_ms, progress=gr.Progress()):
     if not script_text.strip():
         return None, "Write a script first."
@@ -366,7 +367,11 @@ def generate_podcast(script_text, pause_ms, progress=gr.Progress()):
         log_lines.append("")
     log_lines.append(f"📋 Parsed {len(parsed)} lines from {len(characters)} characters")
     for char in characters:
+     if char in voice_map:
         log_lines.append(f"  {char} → voice '{voice_map[char]}'")
+    else:
+        log_lines.append(f"  {char} → Edge-TTS (Hindi/Urdu only, no saved voice needed)")
+        
 
     # Generate each line
     audio_segments = []
