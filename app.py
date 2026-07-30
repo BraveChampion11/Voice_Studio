@@ -8,16 +8,13 @@ os.environ["TEMP"] = TEMP_DIR
 os.environ["TMP"] = TEMP_DIR
 import tempfile
 tempfile.tempdir = TEMP_DIR
-
 import gradio as gr
 import subprocess
 import sys
 import shutil
 from pydub import AudioSegment
-
 SAVED_VOICES_DIR = os.path.join(BASE_DIR, "saved_voices")
 os.makedirs(SAVED_VOICES_DIR, exist_ok=True)
-
 import shutil as _shutil
 
 def _find_exe(name):
@@ -99,12 +96,12 @@ def get_rvc_models():
     return models
 
 def run_rvc_conversion(input_audio, model_name, pitch):
-    if not input_audio: return None, "Please upload a reference audio."
-    if not model_name: return None, "Please select an RVC model (.pth)."
-    
+    if not input_audio:
+        return None, "Please upload a reference audio."
+    if not model_name:
+        return None, "Please select an RVC model (.pth)."
     model_path = os.path.join(RVC_MODELS_DIR, model_name)
     output_path = os.path.join(BASE_DIR, "rvc_output.wav")
-    
     cmd = [
         RVC_PYTHON_EXE, RVC_INFER_SCRIPT,
         "--model", model_path,
@@ -113,12 +110,10 @@ def run_rvc_conversion(input_audio, model_name, pitch):
         "--pitch", str(int(pitch)),
         "--method", "rmvpe"
     ]
-    
     # Try finding an index file with the same name
     index_path = model_path.replace(".pth", ".index")
     if os.path.exists(index_path):
         cmd += ["--index", index_path]
-        
     result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8')
     if result.returncode == 0 and os.path.exists(output_path):
         return output_path, "✅ Voice converted successfully!"
@@ -129,45 +124,41 @@ def run_rvc_conversion(input_audio, model_name, pitch):
 def run_f5tts(text, ref_audio_path, ref_text, output_name="output_cloned.wav"):
     output_path = os.path.join(BASE_DIR, output_name)
     trimmed = os.path.join(TEMP_DIR, "trimmed_ref_gen.wav")
-
     audio = AudioSegment.from_file(ref_audio_path)
-    if len(audio) > 8000:
+    was_trimmed = len(audio) > 8000
+    if was_trimmed:
         audio = audio[:8000]
     audio.export(trimmed, format="wav")
-
     if os.path.exists(output_path):
         os.remove(output_path)
-        
-    # Prevent internal F5-TTS whisper from hanging on low VRAM
-    if not ref_text or not ref_text.strip():
-        # define a dummy progress to pass to extract_text_fn
+    # Prevent internal F5-TTS whisper from hanging on low VRAM.
+    # Always re-transcribe if the source was trimmed — a saved ref_text
+    # describing the FULL original file won't match just the first 8s,
+    # which causes garbled/artifact output from F5-TTS.
+    if was_trimmed or not ref_text or not ref_text.strip():
         class DummyProgress:
-            def __call__(self, *args, **kwargs): pass
+            def __call__(self, *args, **kwargs):
+                pass
         ref_text = extract_text_fn(trimmed, progress=DummyProgress())
         if ref_text.startswith("Error"):
             return None, f"Failed to transcribe reference audio: {ref_text}"
-
     import tomli_w
     config_path = os.path.join(BASE_DIR, "inference_config.toml")
     config_dict = {
         "model": "F5-TTS", "ref_audio": trimmed,
         "ref_text": ref_text.strip(),
-        "speed": 1.0, "nfe_step": 16, "gen_text": text,
+        "speed": 1.0, "nfe_step": 32, "gen_text": text,
         "output_dir": BASE_DIR, "output_file": output_name, "voices": {}
     }
     with open(config_path, "wb") as f:
         tomli_w.dump(config_dict, f)
-
     env = os.environ.copy()
     env.update({"TEMP": TEMP_DIR, "TMP": TEMP_DIR, "NUMBA_DISABLE_JIT": "1",
                 "HF_HOME": os.environ["HF_HOME"], "PYTHONIOENCODING": "utf-8"})
-
     result = subprocess.run([F5_TTS_EXE, "-c", config_path],
-        capture_output=True, text=True, encoding='utf-8', env=env)
-
+                            capture_output=True, text=True, encoding='utf-8', env=env)
     if result.returncode != 0:
         return None, f"CLI Error: {result.stderr[-500:]}"
-
     if os.path.exists(output_path):
         import soundfile as sf
         import numpy as np
@@ -176,7 +167,6 @@ def run_f5tts(text, ref_audio_path, ref_text, output_name="output_cloned.wav"):
         if std < 0.001:
             return None, "Output is silent. Try different reference audio."
         return output_path, f"✅ Generated {len(data)/sr:.1f}s audio"
-
     import glob
     wavs = glob.glob(os.path.join(BASE_DIR, "infer_cli_*.wav"))
     if wavs:
@@ -186,8 +176,10 @@ def run_f5tts(text, ref_audio_path, ref_text, output_name="output_cloned.wav"):
 
 # ─── Tab 1: Standard Clone ───
 def clone_voice_tab1(text, ref_text, audio_ref, progress=gr.Progress()):
-    if not text: return None, "Enter text to generate."
-    if not audio_ref: return None, "Upload a reference audio."
+    if not text:
+        return None, "Enter text to generate."
+    if not audio_ref:
+        return None, "Upload a reference audio."
     progress(0.2, desc="Processing reference...")
     progress(0.4, desc="Running F5-TTS (1-3 min)...")
     path, log = run_f5tts(text, audio_ref, ref_text)
@@ -213,9 +205,7 @@ def dramatic_clone(text, saved_voice_name, narrator_style, progress=gr.Progress(
         return None, None, "Enter a story script."
     if not saved_voice_name:
         return None, None, "Select a saved voice from your library first."
-
     log_lines = []
-
     # Step 1: Generate emotional narration via edge-tts
     progress(0.1, desc="Step 1: Generating dramatic narration...")
     voice_id = NARRATOR_VOICES.get(narrator_style, "en-US-GuyNeural")
@@ -224,14 +214,12 @@ def dramatic_clone(text, saved_voice_name, narrator_style, progress=gr.Progress(
     if not ok:
         return None, None, f"❌ Edge-TTS failed: {err}"
     log_lines.append(f"Step 1: ✅ Emotional narration generated ({narrator_style})")
-
     # Step 2: Clone into anime voice using F5-TTS
     progress(0.4, desc="Step 2: Cloning into anime voice (1-3 min)...")
     voice_audio, voice_text = load_voice(saved_voice_name)
     if not voice_audio:
         log_lines.append(f"Step 2: ⚠️ Voice '{saved_voice_name}' audio not found. Showing emotion base only.")
         return emotion_path, None, "\n".join(log_lines)
-
     clone_path, clone_log = run_f5tts(text, voice_audio, voice_text, "dramatic_clone.wav")
     log_lines.append(f"Step 2: {clone_log}")
     progress(1.0)
@@ -241,10 +229,8 @@ def dramatic_clone(text, saved_voice_name, narrator_style, progress=gr.Progress(
 def generate_hindi(text, voice_id, use_transliteration, speed, pitch, progress=gr.Progress()):
     if not text:
         return None, "Enter some text."
-
     status = []
     final_text = text
-
     if use_transliteration:
         has_devanagari = any('\u0900' <= c <= '\u097F' for c in text)
         if not has_devanagari:
@@ -253,31 +239,30 @@ def generate_hindi(text, voice_id, use_transliteration, speed, pitch, progress=g
             status.append(f"🔄 Transliterated to: {final_text}")
         else:
             status.append("Text already in Devanagari.")
-
     output_path = os.path.join(TEMP_DIR, "hindi_output.mp3")
-
     rate_arg = f"{speed:+d}%" if speed != 0 else None
     pitch_arg = f"{pitch:+d}Hz" if pitch != 0 else None
-
     progress(0.5, desc="Generating voice...")
     ok, err = run_edge_tts(final_text, voice_id, output_path, rate=rate_arg, pitch=pitch_arg)
     if not ok:
         return None, f"❌ Error: {err}"
-
     status.append("✅ Generated successfully!")
     progress(1.0)
     return output_path, "\n".join(status)
+
 def contains_hindi_urdu_script(text):
     """True if text contains Devanagari (Hindi) or Arabic/Urdu script characters."""
     return any('\u0900' <= c <= '\u097F' or '\u0600' <= c <= '\u06FF' for c in text)
 
 # ─── Extract Text (Whisper) ───
 def extract_text_fn(audio_path, progress=gr.Progress()):
-    if not audio_path: return "Upload an audio file first!"
+    if not audio_path:
+        return "Upload an audio file first!"
     try:
         trimmed = os.path.join(TEMP_DIR, "extract_temp.wav")
         audio = AudioSegment.from_file(audio_path)
-        if len(audio) > 8000: audio = audio[:8000]
+        if len(audio) > 8000:
+            audio = audio[:8000]
         audio.export(trimmed, format="wav")
         progress(0.4, desc="Loading Whisper...")
         import torch
@@ -289,8 +274,10 @@ def extract_text_fn(audio_path, progress=gr.Progress()):
         result = pipe(trimmed, chunk_length_s=30, generate_kwargs={"task": "transcribe"})
         text = result['text'].strip()
         del pipe
-        import gc; gc.collect()
-        if torch.cuda.is_available(): torch.cuda.empty_cache()
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         return text
     except Exception as e:
         return f"Error: {str(e)}"
@@ -320,30 +307,29 @@ def parse_podcast_script(script_text):
     if not lines:
         warnings.append("No valid lines found. Use format 'SPEAKER: dialogue text' on each line.")
     return lines, warnings
+
 DEFAULT_HINDI_URDU_VOICE = "hi-IN-MadhurNeural"  # Edge-TTS native voice for Hindi/Urdu lines
+
 def generate_podcast(script_text, pause_ms, progress=gr.Progress()):
     if not script_text.strip():
         return None, "Write a script first."
-
     parsed, warnings = parse_podcast_script(script_text)
     if not parsed:
         return None, "❌ Could not parse script. Use format:\nNARUTO: Hey Luffy!\nLUFFY: Hey Naruto!\n\n" + "\n".join(warnings)
-
     # Collect unique character names
-    parsed, warnings = parse_podcast_script(script_text)
-    if not parsed:
-        return None, "❌ Could not parse script. Use format:\nNARUTO: Hey Luffy!\nLUFFY: Hey Naruto!\n\n" + "\n".join(warnings)
-
-    # Collect unique character names
-    characters = list(dict.fromkeys([name for name, _ in parsed]))
+    seen = {}
+    characters = []
+    for name, _ in parsed:
+        key = name.lower()
+        if key not in seen:
+            seen[key] = name
+            characters.append(name)
     saved = get_saved_voices()
     saved_lower = {v.lower(): v for v in saved}
-
     # Only characters who have at least one non-Hindi/Urdu line need a saved voice
     characters_needing_voice = set(
         char for char, dialogue in parsed if not contains_hindi_urdu_script(dialogue)
     )
-
     voice_map = {}
     missing = []
     for char in characters_needing_voice:
@@ -351,11 +337,10 @@ def generate_podcast(script_text, pause_ms, progress=gr.Progress()):
             voice_map[char] = saved_lower[char.lower()]
         else:
             missing.append(char)
-
     if missing:
         return None, (
             f"❌ These characters have no matching saved voice:\n"
-            f"  {', '.join(missing)}\n\n"
+            f" {', '.join(missing)}\n\n"
             f"Your saved voices: {', '.join(saved)}\n\n"
             f"Character names in your script must match saved voice names.\n"
             f"Go to the Voice Cloner tab to save voices first."
@@ -363,28 +348,22 @@ def generate_podcast(script_text, pause_ms, progress=gr.Progress()):
     log_lines = []
     if warnings:
         log_lines.append("⚠️ Parser warnings:")
-        log_lines.extend(f"  {w}" for w in warnings)
+        log_lines.extend(f" {w}" for w in warnings)
         log_lines.append("")
     log_lines.append(f"📋 Parsed {len(parsed)} lines from {len(characters)} characters")
     for char in characters:
-     if char in voice_map:
-        log_lines.append(f"  {char} → voice '{voice_map[char]}'")
-    else:
-        log_lines.append(f"  {char} → Edge-TTS (Hindi/Urdu only, no saved voice needed)")
-        
-
+        if char in voice_map:
+            log_lines.append(f" {char} → voice '{voice_map[char]}'")
+        else:
+            log_lines.append(f" {char} → Edge-TTS (Hindi/Urdu only, no saved voice needed)")
     # Generate each line
     audio_segments = []
-
     for i, (char, dialogue) in enumerate(parsed):
         progress((i + 1) / len(parsed), desc=f"Generating line {i+1}/{len(parsed)}: {char}...")
-
         is_hindi_urdu = contains_hindi_urdu_script(dialogue)
         route = "Edge-TTS (native Hindi/Urdu)" if is_hindi_urdu else "F5-TTS (voice clone)"
         log_lines.append(f"\n🎙️ [{i+1}/{len(parsed)}] {char} via {route}: \"{dialogue[:50]}...\"")
-
         out_name = f"podcast_line_{i}.wav"
-
         if is_hindi_urdu:
             # Route through Edge-TTS for correct native pronunciation.
             # NOTE: this uses one default Hindi/Urdu voice for all such lines rather
@@ -397,20 +376,17 @@ def generate_podcast(script_text, pause_ms, progress=gr.Progress()):
             voice_name = voice_map[char]
             voice_audio, voice_text = load_voice(voice_name)
             if not voice_audio:
-                log_lines.append(f"  ⚠️ Audio file missing for '{voice_name}', skipping.")
+                log_lines.append(f" ⚠️ Audio file missing for '{voice_name}', skipping.")
                 continue
             path, gen_log = run_f5tts(dialogue, voice_audio, voice_text, output_name=out_name)
-
         if path and os.path.exists(path):
             seg = AudioSegment.from_file(path)
             audio_segments.append(seg)
-            log_lines.append(f"  ✅ {len(seg)/1000:.1f}s generated")
+            log_lines.append(f" ✅ {len(seg)/1000:.1f}s generated")
         else:
-            log_lines.append(f"  ❌ Failed: {gen_log}")
-
+            log_lines.append(f" ❌ Failed: {gen_log}")
     if not audio_segments:
         return None, "\n".join(log_lines) + "\n\n❌ No audio was generated."
-
     # Stitch together with a crossfade instead of a hard silence gap
     log_lines.append(f"\n🔗 Stitching {len(audio_segments)} segments with crossfade...")
     final = audio_segments[0]
@@ -421,15 +397,15 @@ def generate_podcast(script_text, pause_ms, progress=gr.Progress()):
             final = final.append(seg, crossfade=safe_fade)
         else:
             final = final + seg  # segment too short to crossfade safely, just concatenate
-
     output_path = os.path.join(BASE_DIR, "podcast_output.wav")
     final.export(output_path, format="wav")
     log_lines.append(f"✅ Final podcast: {len(final)/1000:.1f}s total")
-
     return output_path, "\n".join(log_lines)
+
 # ─── Audio Editor Functions ───
 def edit_audio_trim(audio_path, start_s, end_s):
-    if not audio_path: return None, "Upload audio first."
+    if not audio_path:
+        return None, "Upload audio first."
     try:
         audio = AudioSegment.from_file(audio_path)
         start_ms, end_ms = int(start_s * 1000), int(end_s * 1000)
@@ -441,7 +417,8 @@ def edit_audio_trim(audio_path, start_s, end_s):
         return None, f"❌ Error: {e}"
 
 def edit_audio_cut(audio_path, start_s, end_s):
-    if not audio_path: return None, "Upload audio first."
+    if not audio_path:
+        return None, "Upload audio first."
     try:
         audio = AudioSegment.from_file(audio_path)
         start_ms, end_ms = int(start_s * 1000), int(end_s * 1000)
@@ -453,25 +430,24 @@ def edit_audio_cut(audio_path, start_s, end_s):
         return None, f"❌ Error: {e}"
 
 def edit_audio_replace(audio_path, start_s, end_s, text, voice_name, progress=gr.Progress()):
-    if not audio_path: return None, "Upload audio first."
-    if not text: return None, "Enter text to generate."
-    if not voice_name: return None, "Select a voice."
+    if not audio_path:
+        return None, "Upload audio first."
+    if not text:
+        return None, "Enter text to generate."
+    if not voice_name:
+        return None, "Select a voice."
     try:
         audio = AudioSegment.from_file(audio_path)
         start_ms, end_ms = int(start_s * 1000), int(end_s * 1000)
-        
         voice_audio, voice_text = load_voice(voice_name)
         if not voice_audio:
             return None, f"❌ Audio file missing for '{voice_name}'"
-            
         progress(0.3, desc="Generating new segment...")
         new_path, gen_log = run_f5tts(text, voice_audio, voice_text, output_name="replacement.wav")
         if not new_path or not os.path.exists(new_path):
             return None, f"❌ Generation failed: {gen_log}"
-            
         new_seg = AudioSegment.from_file(new_path)
         final = audio[:start_ms] + new_seg + audio[end_ms:]
-        
         out = os.path.join(BASE_DIR, "edited_audio.wav")
         final.export(out, format="wav")
         return out, f"✅ Replaced {start_s}s to {end_s}s with new generated audio."
@@ -490,16 +466,13 @@ def preprocess_training_audio(audio_path, chunk_seconds=10, normalize_db=-20.0, 
         import numpy as np
         import noisereduce as nr
         from pydub.silence import detect_nonsilent
-
         progress(0.1, desc="Loading raw audio...")
         audio = AudioSegment.from_file(audio_path)
         original_duration = len(audio) / 1000.0
-
         # Step 1: Convert to mono 16kHz first (standard for speech ML models,
         # and noise reduction/silence detection both work more reliably on a
         # consistent sample rate/channel count)
         audio = audio.set_channels(1).set_frame_rate(16000)
-
         # Step 2: Noise reduction (spectral gating) — cleans hiss/hum/background
         # noise before we normalize volume or detect silence, since noisy audio
         # throws off both of those steps otherwise.
@@ -513,12 +486,10 @@ def preprocess_training_audio(audio_path, chunk_seconds=10, normalize_db=-20.0, 
             sample_width=2,
             channels=1,
         )
-
         # Step 3: Normalize volume (ML best practice for consistent training data)
         progress(0.4, desc="Normalizing volume levels...")
         change_in_dBFS = normalize_db - audio.dBFS
         audio = audio.apply_gain(change_in_dBFS)
-
         # Step 4: Trim silence — detect non-silent regions and splice them
         # together, so training chunks aren't wasted on dead air. Threshold is
         # relative to the file's own loudness rather than a fixed dB value, so
@@ -536,22 +507,18 @@ def preprocess_training_audio(audio_path, chunk_seconds=10, normalize_db=-20.0, 
         # If detection finds nothing non-silent (e.g. very quiet recording),
         # fall back to the full (already denoised + normalized) audio rather
         # than producing an empty file.
-
         # Step 5: Chunk into training segments
         progress(0.7, desc="Chunking into training segments...")
         chunk_ms = int(chunk_seconds * 1000)
         chunks = [audio[i:i + chunk_ms] for i in range(0, len(audio), chunk_ms)]
         # Drop last chunk if too short (< 2 seconds)
         chunks = [c for c in chunks if len(c) >= 2000]
-
         # Step 6: Export each chunk
         session_dir = os.path.join(TRAINING_DIR, f"session_{len(os.listdir(TRAINING_DIR))}")
         os.makedirs(session_dir, exist_ok=True)
-
         progress(0.85, desc="Exporting clean training chunks...")
         for i, chunk in enumerate(chunks):
             chunk.export(os.path.join(session_dir, f"chunk_{i:03d}.wav"), format="wav")
-
         trimmed_duration = len(audio) / 1000.0
         log = (
             f"✅ Audio Dataset Preprocessed!\n"
@@ -577,10 +544,8 @@ def analyze_voice_similarity(audio_a, audio_b, progress=gr.Progress()):
         import torch
         import numpy as np
         from transformers import WhisperProcessor, WhisperModel
-
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
         dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-
         processor = WhisperProcessor.from_pretrained("openai/whisper-base")
         model = WhisperModel.from_pretrained("openai/whisper-base").to(device).to(dtype)
 
@@ -593,24 +558,22 @@ def analyze_voice_similarity(audio_a, audio_b, progress=gr.Progress()):
             input_features = inputs.input_features.to(device).to(dtype)
             with torch.no_grad():
                 encoder_out = model.encoder(input_features)
-                embedding = encoder_out.last_hidden_state.mean(dim=1).squeeze()
+            embedding = encoder_out.last_hidden_state.mean(dim=1).squeeze()
             return embedding
 
         progress(0.5, desc="Extracting voice embeddings...")
         emb_a = get_embedding(audio_a)
         progress(0.7, desc="Comparing voice signatures...")
         emb_b = get_embedding(audio_b)
-
         # Cosine Similarity
         cos_sim = torch.nn.functional.cosine_similarity(emb_a.unsqueeze(0), emb_b.unsqueeze(0)).item()
         similarity_pct = max(0, min(100, cos_sim * 100))
-
         # Cleanup GPU
         del model, processor, emb_a, emb_b
-        import gc; gc.collect()
+        import gc
+        gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-
         grade = "🟢 Excellent" if similarity_pct > 85 else "🟡 Good" if similarity_pct > 70 else "🔴 Poor"
         progress(1.0)
         return (
@@ -620,15 +583,15 @@ def analyze_voice_similarity(audio_a, audio_b, progress=gr.Progress()):
             f"Quality Grade: {grade}\n\n"
             f"{'='*40}\n"
             f"If the score is below 70%, consider:\n"
-            f"  • Using a longer/cleaner reference audio\n"
-            f"  • Fine-tuning the model with more training data\n"
-            f"  • Adjusting the pitch shift parameter"
+            f" • Using a longer/cleaner reference audio\n"
+            f" • Fine-tuning the model with more training data\n"
+            f" • Adjusting the pitch shift parameter"
         )
     except Exception as e:
         return f"❌ Analysis Error: {e}"
 
 # ═══════════════════════════════════════
-#  GRADIO UI
+# GRADIO UI
 # ═══════════════════════════════════════
 import base64
 logo_path = os.path.join(BASE_DIR, "LOGO.jpg")
@@ -654,7 +617,6 @@ header_html = f"""
 
 with gr.Blocks(title="🎙️ Zenvyrolabs Voice Studio", css=custom_css) as interface:
     gr.HTML(header_html)
-
     with gr.Tabs():
         # ─── TAB 1: Voice Cloner ───
         with gr.TabItem("🎭 Voice Cloner"):
@@ -671,20 +633,17 @@ with gr.Blocks(title="🎙️ Zenvyrolabs Voice Studio", css=custom_css) as inte
                     voice_name = gr.Textbox(label="Name", placeholder="e.g. Gojo_Dramatic")
                     save_btn = gr.Button("💾 Save to Library", variant="primary")
                     lib_status = gr.Textbox(label="Status", interactive=False)
-
                 with gr.Column(scale=2):
                     gen_text1 = gr.Textbox(label="Script to Speak", lines=6, placeholder="Type your story here...")
                     ref_audio1 = gr.Audio(type="filepath", label="Reference Voice (auto-trims to 8s)")
                     with gr.Row():
                         ref_text1 = gr.Textbox(label="Reference Text", lines=2, scale=4,
-                            placeholder="Type exact words from the reference audio...")
+                                               placeholder="Type exact words from the reference audio...")
                         extract_btn1 = gr.Button("🔍 Auto-Extract", variant="secondary", scale=1)
                     clone_btn1 = gr.Button("🎙️ Generate Clone", variant="primary", size="lg")
-
-            with gr.Row():
-                out_audio1 = gr.Audio(label="Generated Audio")
-                out_log1 = gr.Textbox(label="Log")
-
+                    with gr.Row():
+                        out_audio1 = gr.Audio(label="Generated Audio")
+                        out_log1 = gr.Textbox(label="Log")
             load_btn.click(fn=load_voice, inputs=[saved_dd], outputs=[ref_audio1, ref_text1])
             extract_btn1.click(fn=extract_text_fn, inputs=[ref_audio1], outputs=[ref_text1])
             clone_btn1.click(fn=clone_voice_tab1, inputs=[gen_text1, ref_text1, ref_audio1], outputs=[out_audio1, out_log1])
@@ -695,9 +654,7 @@ with gr.Blocks(title="🎙️ Zenvyrolabs Voice Studio", css=custom_css) as inte
 1. **Step 1:** Microsoft Neural AI creates a dramatic, emotional narration (perfect pronunciation & emotions).
 2. **Step 2:** F5-TTS re-generates the same script using your saved anime voice (Gojo, Naruto, etc).
 3. You get **two outputs** — pick whichever sounds better!
-
 **Pro tip:** The emotion base alone sounds incredible for YouTube. The anime clone adds character flavor.""")
-
             with gr.Row():
                 with gr.Column():
                     saved_dd2 = gr.Dropdown(choices=get_saved_voices(), label="Select Saved Anime Voice", interactive=True)
@@ -706,50 +663,42 @@ with gr.Blocks(title="🎙️ Zenvyrolabs Voice Studio", css=custom_css) as inte
                         label="Emotion Narrator Style", value="Guy (Passionate Male)"
                     )
                     story_text = gr.Textbox(label="Your Story Script", lines=10,
-                        placeholder="My daughter went missing five years ago...")
+                                            placeholder="My daughter went missing five years ago...")
                     dramatic_btn = gr.Button("🎬 Generate Dramatic Voiceover", variant="primary", size="lg")
-
                 with gr.Column():
                     gr.Markdown("### Step 1: Emotional Narration (Microsoft Neural)")
                     emotion_audio = gr.Audio(label="Emotion Base")
                     gr.Markdown("### Step 2: Anime Voice Clone (F5-TTS)")
                     clone_audio = gr.Audio(label="Anime Voice Version")
                     dramatic_log = gr.Textbox(label="Generation Log")
-
             dramatic_btn.click(fn=dramatic_clone,
-                inputs=[story_text, saved_dd2, narrator_style],
-                outputs=[emotion_audio, clone_audio, dramatic_log])
+                               inputs=[story_text, saved_dd2, narrator_style],
+                               outputs=[emotion_audio, clone_audio, dramatic_log])
 
         # ─── TAB 3: Multi-Voice Podcast ───
         with gr.TabItem("🎙️ Multi-Voice Podcast"):
             gr.Markdown("""### Create Podcasts with Multiple Anime Voices
 Write a script with character names that **match your saved voices**. Each line is generated with the correct voice and stitched into one seamless audio.
-
 **Script Format:**
-```
 NARUTO: Hey Luffy, what's up man!
 LUFFY: Yo Naruto! Just finished eating, I'm pumped!
 NARUTO: Wanna go train together?
 LUFFY: Let's gooo!
-```
-⚠️ Character names must **exactly match** your saved voice names (case-insensitive).""")
-
+text⚠️ Character names must **exactly match** your saved voice names (case-insensitive).""")
             with gr.Row():
                 with gr.Column():
                     podcast_voices_dd = gr.Dropdown(choices=get_saved_voices(), multiselect=True, label="Your Saved Voices", info="Select the characters you want to use in your podcast script", interactive=True)
                     podcast_script = gr.Textbox(label="Podcast Script", lines=14,
-                        placeholder="NARUTO: Hey Luffy, what's going on?\nLUFFY: Hey Naruto! Just had the best meat ever!\nNARUTO: That sounds awesome, want to spar?\nLUFFY: You're on!")
+                                                placeholder="NARUTO: Hey Luffy, what's going on?\nLUFFY: Hey Naruto! Just had the best meat ever!\nNARUTO: That sounds awesome, want to spar?\nLUFFY: You're on!")
                     pause_slider = gr.Slider(100, 2000, value=500, step=50,
-                        label="Transition length (ms)", info="How long to pause between each character's line")
+                                             label="Transition length (ms)", info="How long to pause between each character's line")
                     podcast_btn = gr.Button("🎙️ Generate Full Podcast", variant="primary", size="lg")
-
                 with gr.Column():
                     podcast_audio = gr.Audio(label="Final Podcast Audio")
                     podcast_log = gr.Textbox(label="Generation Log", lines=15)
-
             podcast_btn.click(fn=generate_podcast,
-                inputs=[podcast_script, pause_slider],
-                outputs=[podcast_audio, podcast_log])
+                              inputs=[podcast_script, pause_slider],
+                              outputs=[podcast_audio, podcast_log])
 
         # ─── TAB 4: Hindi / Urdu ───
         with gr.TabItem("🌏 Hindi / Urdu"):
@@ -757,11 +706,10 @@ LUFFY: Let's gooo!
 **Fix:** Auto-converts Roman Hindi/Urdu → Devanagari script before generating, so pronunciation is accurate.
 - Type **Roman** (kya haal hai) → auto-converts to **Devanagari** (क्या हाल है)
 - Or type directly in **Devanagari** for best quality""")
-
             with gr.Row():
                 with gr.Column():
                     hindi_text = gr.Textbox(label="Hindi / Urdu Text", lines=6,
-                        placeholder="Hello bhai, kya haal hai? Aaj hum ek bahut hi dilchasp kahani sunenge...")
+                                            placeholder="Hello bhai, kya haal hai? Aaj hum ek bahut hi dilchasp kahani sunenge...")
                     transliterate_toggle = gr.Checkbox(label="🔄 Auto-convert Roman → Devanagari (Recommended!)", value=True)
                     hindi_voice = gr.Dropdown(
                         choices=["hi-IN-MadhurNeural", "hi-IN-SwaraNeural",
@@ -774,38 +722,31 @@ LUFFY: Let's gooo!
                         hindi_speed = gr.Slider(-30, 30, value=0, step=5, label="Speed (%)")
                         hindi_pitch = gr.Slider(-20, 20, value=0, step=2, label="Pitch (Hz)")
                     hindi_btn = gr.Button("🎙️ Generate Hindi/Urdu Voice", variant="primary", size="lg")
-
                 with gr.Column():
                     hindi_audio = gr.Audio(label="Generated Audio")
                     hindi_log = gr.Textbox(label="Status")
-
             hindi_btn.click(fn=generate_hindi,
-                inputs=[hindi_text, hindi_voice, transliterate_toggle, hindi_speed, hindi_pitch],
-                outputs=[hindi_audio, hindi_log])
+                            inputs=[hindi_text, hindi_voice, transliterate_toggle, hindi_speed, hindi_pitch],
+                            outputs=[hindi_audio, hindi_log])
 
         # ─── TAB 5: Audio Editor ───
         with gr.TabItem("✂️ Audio Editor"):
             gr.Markdown("Upload an audio file (or download a generated one and upload here) to trim, cut, or completely replace a bad segment with a newly generated voice!")
-            
             with gr.Row():
                 with gr.Column(scale=1):
                     edit_audio_in = gr.Audio(type="filepath", label="Source Audio", interactive=True)
                     start_s = gr.Number(label="Start Time (seconds)", value=0.0)
                     end_s = gr.Number(label="End Time (seconds)", value=5.0)
-                    
                     with gr.Row():
                         trim_btn = gr.Button("✂️ Trim (Keep Only Selection)", variant="secondary")
                         cut_btn = gr.Button("🗑️ Cut (Remove Selection)", variant="secondary")
-                        
                     gr.Markdown("### Replace Segment")
                     replace_text = gr.Textbox(label="New Text for Segment", lines=2)
                     replace_voice = gr.Dropdown(choices=get_saved_voices(), label="Select Voice for New Segment", interactive=True)
                     replace_btn = gr.Button("🔄 Replace Segment", variant="primary")
-                
                 with gr.Column(scale=1):
                     edit_audio_out = gr.Audio(label="Edited Audio")
                     edit_log = gr.Textbox(label="Status Log")
-                    
             trim_btn.click(fn=edit_audio_trim, inputs=[edit_audio_in, start_s, end_s], outputs=[edit_audio_out, edit_log])
             cut_btn.click(fn=edit_audio_cut, inputs=[edit_audio_in, start_s, end_s], outputs=[edit_audio_out, edit_log])
             replace_btn.click(fn=edit_audio_replace, inputs=[edit_audio_in, start_s, end_s, replace_text, replace_voice], outputs=[edit_audio_out, edit_log])
@@ -825,14 +766,13 @@ Upload an audio of **you acting out a line**, select a downloaded `.pth` anime c
                 with gr.Column():
                     rvc_out = gr.Audio(label="Converted Audio")
                     rvc_log = gr.Textbox(label="Status Log", lines=10)
-                    
             rvc_btn.click(fn=run_rvc_conversion, inputs=[rvc_in, rvc_model, rvc_pitch], outputs=[rvc_out, rvc_log])
             rvc_refresh.click(fn=lambda: gr.update(choices=get_rvc_models()), outputs=[rvc_model])
 
         # ─── TAB 7: Perfect Pronunciation Clone ───
         with gr.TabItem("🌟 Perfect Pronunciation Clone", visible=False):
             gr.Markdown("""### Get Anime Voices with PERFECT Pronunciation
-F5-TTS sometimes struggles with pronunciation. This tab fixes that! 
+F5-TTS sometimes struggles with pronunciation. This tab fixes that!
 It uses **Edge-TTS (Eric, Guy, etc.)** to generate perfect, native pronunciation, and then uses **RVC** to seamlessly morph that audio into your Anime character's voice.
 *(Requires an RVC `.pth` model in `rvc_models/`)*""")
             with gr.Row():
@@ -847,35 +787,32 @@ It uses **Edge-TTS (Eric, Guy, etc.)** to generate perfect, native pronunciation
                     perf_log = gr.Textbox(label="Status Log")
 
             def run_perfect_clone(text, neural_voice, rvc_model, pitch, progress=gr.Progress()):
-                if not text: return None, "Please enter text."
-                if not rvc_model: return None, "Please select an RVC model."
-                
+                if not text:
+                    return None, "Please enter text."
+                if not rvc_model:
+                    return None, "Please select an RVC model."
                 progress(0.2, desc="Generating perfect pronunciation...")
                 voice_id = NARRATOR_VOICES.get(neural_voice, "en-US-EricNeural")
                 temp_audio = os.path.join(TEMP_DIR, "perf_base.mp3")
                 ok, err = run_edge_tts(text, voice_id, temp_audio)
                 if not ok:
                     return None, f"❌ Edge-TTS failed: {err}"
-                
                 progress(0.6, desc="Morphing into Anime Voice (RVC)...")
                 final_path, log = run_rvc_conversion(temp_audio, rvc_model, pitch)
                 progress(1.0)
                 return final_path, log
-            
+
             perf_btn.click(fn=run_perfect_clone, inputs=[perf_text, perf_neural, perf_rvc, perf_pitch], outputs=[perf_audio, perf_log])
 
         # ─── TAB 8: Voice Training Studio (Real ML) ───
         with gr.TabItem("🧠 Voice Training Studio"):
             gr.Markdown("""### 🧠 AI Model Training Pipeline
 This is the **core Machine Learning** feature of the application. Instead of relying on zero-shot cloning (which can sound robotic), you can **train a custom voice model** by feeding it high-quality audio data.
-
 **How it works (Real ML Pipeline):**
 1. **Upload** a long audio recording of your target voice (5-10 minutes recommended).
 2. **Preprocess** — Our pipeline will automatically normalize volume levels, resample to 16kHz mono (the standard for speech ML models), remove silence, and chunk the audio into clean 10-second training segments.
 3. **Analyze** — Use the Voice Quality Analyzer to compare your cloned output vs the original and get a real ML similarity score using Whisper neural embeddings.
-
 *This is the exact same data preprocessing pipeline used in production ML systems at companies like ElevenLabs and OpenAI.*""")
-
             with gr.Row():
                 with gr.Column():
                     gr.Markdown("### Step 1: Upload Raw Training Audio")
@@ -883,21 +820,17 @@ This is the **core Machine Learning** feature of the application. Instead of rel
                     chunk_size = gr.Slider(5, 30, value=10, step=1, label="Chunk Size (seconds)", info="Each chunk becomes one training sample")
                     norm_db = gr.Slider(-30, -10, value=-20, step=1, label="Target Volume (dBFS)", info="Normalizes all chunks to this volume level for consistent training")
                     preprocess_btn = gr.Button("⚙️ Preprocess Dataset", variant="primary", size="lg")
-
                 with gr.Column():
                     gr.Markdown("### Preprocessing Results")
                     train_output_dir = gr.Textbox(label="Output Directory", interactive=False)
                     train_log = gr.Textbox(label="Pipeline Log", lines=10)
-
             preprocess_btn.click(fn=preprocess_training_audio,
-                inputs=[train_audio, chunk_size, norm_db],
-                outputs=[train_output_dir, train_log])
-
+                                 inputs=[train_audio, chunk_size, norm_db],
+                                 outputs=[train_output_dir, train_log])
             gr.Markdown("---")
             gr.Markdown("""### Step 2: Voice Quality Analyzer (Cosine Similarity)
 Upload the **original voice** and your **cloned output** to measure how accurate the clone is using real ML metrics.
 The system uses **OpenAI Whisper's neural encoder** to extract voice embeddings and computes **cosine similarity** — the same technique used in speaker verification systems.""")
-
             with gr.Row():
                 with gr.Column():
                     sim_audio_a = gr.Audio(type="filepath", label="Audio A: Original Voice")
@@ -905,10 +838,9 @@ The system uses **OpenAI Whisper's neural encoder** to extract voice embeddings 
                     sim_btn = gr.Button("🧠 Analyze Similarity", variant="primary", size="lg")
                 with gr.Column():
                     sim_result = gr.Textbox(label="ML Analysis Results", lines=12)
-
             sim_btn.click(fn=analyze_voice_similarity,
-                inputs=[sim_audio_a, sim_audio_b],
-                outputs=[sim_result])
+                          inputs=[sim_audio_a, sim_audio_b],
+                          outputs=[sim_result])
 
     # Global event bindings
     save_btn.click(fn=save_voice, inputs=[voice_name, ref_audio1, ref_text1], outputs=[lib_status, saved_dd, saved_dd2, podcast_voices_dd, replace_voice])
@@ -917,5 +849,4 @@ The system uses **OpenAI Whisper's neural encoder** to extract voice embeddings 
 if __name__ == "__main__":
     print("Launching Advanced Voice Studio...")
     print(f"Saved Voices: {get_saved_voices()}")
-    
-interface.launch(server_name="0.0.0.0", inbrowser=False, show_api=False)
+    interface.launch(server_name="0.0.0.0", inbrowser=False, show_api=False)
